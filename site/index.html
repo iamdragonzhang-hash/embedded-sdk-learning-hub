@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f8f9fd">
+  <meta name="description" content="嵌入式 SDK 每日训练：知识问答、Code Review、选择题、填空题与历史复习。">
+  <title>Embedded SDK Learning Hub</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./app.js"></script>
+</head>
+<body>
+ <div class="layout">
+  <aside class="sidebar">
+   <div class="brand"><span class="brand-icon">⌘</span><div><strong>Embedded<span>Lab</span></strong><small>SDK Learning Hub</small></div></div>
+   <div class="sidebar-label">学习空间</div>
+   <nav aria-label="学习导航">
+    <button class="nav active" data-view="latest"><span class="nav-ico">◉</span> 最新训练 <span class="nav-meta" id="latest-count">—</span></button>
+    <button class="nav" data-view="all"><span class="nav-ico">▤</span> 历史题库 <span class="nav-meta" id="all-count">—</span></button>
+    <button class="nav" data-view="wrong"><span class="nav-ico">☆</span> 错题与收藏 <span class="nav-meta" id="wrong-count">0</span></button>
+   </nav>
+   <div class="side-card"><span class="subtle">本地学习进度</span><div class="side-numbers"><strong id="side-done">0</strong><span id="side-total">/ 0 道</span></div><div class="meter"><span id="side-meter"></span></div><p>答题记录仅保存在当前浏览器；换设备可导出并导入。</p></div>
+   <div class="sidebar-actions"><button class="quiet" id="export-btn">↗ 导出进度</button><button class="quiet" id="import-btn">↙ 导入进度</button><input hidden id="import-file" type="file" accept="application/json,.json"></div>
+   <div class="side-footer">面向嵌入式、底层驱动与音频 DSP</div>
+  </aside>
+  <main class="main">
+   <header class="topbar"><span class="crumb">Workspace <span>/</span> <span id="breadcrumb">最新训练</span></span><span class="tz-pill">北京时间 · Asia/Shanghai</span></header>
+   <section class="hero"><div class="hero-body"><span class="eyebrow">BUILD KNOWLEDGE, NOT JUST CODE</span><h1>每天进步一点，<br><em>成为更可靠的工程师。</em></h1><p>把问题想清楚，再看答案。让知识、调试经验和 Code Review 能力真正沉淀下来。</p><div class="hero-pills"><span>CPU / Cache / DMA</span><span>RTOS / Linux</span><span>DSP / Audio</span><span>Driver / Review</span></div></div><div class="hero-art" aria-hidden="true"><div class="art-window"><div class="art-head"><i></i><i></i><i></i><span>debug.log</span></div><div class="art-lines"><span>01&nbsp;&nbsp; <b>observe</b>(symptom)</span><span>02&nbsp;&nbsp; <b>reason</b>(evidence)</span><span>03&nbsp;&nbsp; <b>verify</b>(hypothesis)</span><span>04&nbsp;&nbsp; <b>remember</b>(pattern)</span></div><div class="art-success">● BUILD YOUR DEBUG INSTINCT</div></div></div></section>
+   <section class="stats"><div class="stat"><small>题库题目</small><strong id="stat-total">—</strong><span>持续积累</span></div><div class="stat"><small>已完成</small><strong id="stat-done">0</strong><span>当前浏览器</span></div><div class="stat"><small>待复习</small><strong id="stat-wrong">0</strong><span>错题与收藏</span></div><div class="stat"><small>完成进度</small><strong id="stat-percent">0%</strong><span>今天也要动脑</span></div></section>
+   <section class="content">
+    <div class="section-head"><div><span class="section-kicker" id="section-kicker">LATEST PRACTICE</span><h2 id="section-title">最新训练</h2><p id="section-caption">先思考，再揭晓答案。</p></div><div class="filter-row"><label class="search"><span>⌕</span><input type="search" id="search" placeholder="搜索主题或关键词" autocomplete="off"></label><select id="topic-filter" aria-label="按主题筛选"><option value="">全部主题</option></select></div></div>
+    <div class="notice" id="notice" role="status" hidden></div>
+    <div id="question-list" aria-live="polite"><p class="loading">正在加载题库……</p></div>
+   </section>
+   <footer>EmbeddedLab · 训练内容用于学习与自检，工程结论以芯片手册和实测为准。</footer>
+  </main>
+ </div>
+</body>
+</html>

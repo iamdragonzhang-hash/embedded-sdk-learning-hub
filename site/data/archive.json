@@ -1,0 +1,395 @@
+{
+  "source_notice": "历史练习根据本次对话中可见的 7 组训练内容整理；原始发送日期不完整，因此使用批次编号，不虚构日期。部分开放题改编成交互题。",
+  "batches": [
+    {
+      "id": "archive-01",
+      "label": "历史练习 01",
+      "intro": "DMA Cache · UART 中断 · GPIO 寄存器",
+      "questions": [
+        {
+          "id": "a01-q1",
+          "topic": "DMA / Cache",
+          "title": "I2S TX DMA 偶发读取旧 PCM",
+          "type": "knowledge",
+          "difficulty": "工程进阶",
+          "question": "开启 Write-back D-Cache 后，CPU 处理完 tx_buf 就启动不一致性 DMA，偶尔爆音；关闭 Cache 正常。解释根因、为什么 printf 会影响复现，以及应在什么阶段执行哪类 Cache Maintenance。",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "CPU 修改的 PCM 可能只在 Dirty Cache Line，DMA 从内存读到旧数据。通常在交给 TX DMA 前 Clean 对应 Cache Line，并遵守芯片要求的内存屏障；Buffer 最好按 Cache Line 对齐且独立占用。",
+          "explanation": "printf 可能改变调度与 Cache eviction，降低问题概率并不说明已修复。维护范围需按完整 Cache Line 扩展，且避免误伤共享行。",
+          "diagnostic_cue": "DMA TX 数据错乱、关闭 D-Cache 恢复时，先查 TX Clean 和 Buffer 所有权。"
+        },
+        {
+          "id": "a01-q2",
+          "topic": "中断 / UART",
+          "title": "逐字节 UART ISR 与 Task 协作",
+          "type": "knowledge",
+          "difficulty": "工程进阶",
+          "question": "3 Mbps UART：ISR 每字节通过 FreeRTOS Queue 通知 Task。为什么这种设计仍可能丢字节？给出更适合高速 SDK 的方案。",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "逐字节中断/Queue 开销大，Task 未及时运行可能导致 Queue 满、FIFO 溢出；必须检查 FromISR 返回并统计丢字节。优先考虑 UART FIFO + DMA + 环形缓冲 + 半满/Idle 中断，再让 Task 做解析。",
+          "explanation": "短 ISR 的目标是满足实时约束，不是盲目把所有工作移走。",
+          "diagnostic_cue": "串口高速突发、CRC 错误、任务阻塞时优先排查 Queue overflow 和 UART FIFO。"
+        },
+        {
+          "id": "a01-q3",
+          "topic": "寄存器 / Review",
+          "title": "GPIO MODE 字段越界",
+          "type": "review",
+          "difficulty": "工程进阶",
+          "question": "Code Review：GPIO_CTRL bit[7]=ENABLE，bit[6:4]=MODE，bit[3:2]=DRIVE。下面操作有什么问题？至少找出 3 点。",
+          "code": "GPIO_CTRL &= ~(0x7 << 4);\nGPIO_CTRL |=  (mode << 4);\n// gpio_set_mode(0xF)",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "mode 未限制为 3 bit，mode=0xF 会污染 ENABLE；两次 RMW 增加竞态窗口；寄存器字段可能有特殊 W1C/只读/硬件异步更新语义。应先核对 TRM，校验参数，并考虑 SET/CLEAR 或受保护的 masked write。",
+          "explanation": "合并两次 RMW 虽减少窗口，但不能消除所有并发和特殊寄存器访问风险。",
+          "diagnostic_cue": "位域写入波及旁路功能，或者寄存器在中断后状态异常时查 RMW 和字段掩码。"
+        }
+      ]
+    },
+    {
+      "id": "archive-02",
+      "label": "历史练习 02",
+      "intro": "ELF 内存 · DMA 中断 · I2S 时钟",
+      "questions": [
+        {
+          "id": "a02-q1",
+          "topic": "ELF / 链接",
+          "title": "bin 很小但 RAM overflow",
+          "type": "knowledge",
+          "difficulty": "工程进阶",
+          "question": "固件 .bin 只有约 380 KB，SRAM 为 512 KB，却提示 RAM overflow。解释 .bss、.data、.rodata 的关系，以及优先用什么工具定位。",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "bin 文件大小不能判断 RAM 占用。.bss 在运行时占 RAM，但一般不存零值的初始镜像；.data 运行时占 RAM，同时通常在 Flash 存放初始镜像；.rodata 的最终位置取决于链接脚本。用 .map、size、nm --size-sort、readelf -S 追到具体对象和符号。",
+          "explanation": "heap、stack、RTOS 对象及 DMA 缓冲同样影响实际 RAM 预算。",
+          "diagnostic_cue": "bin 不大却链接 RAM 溢出时查 section 和符号，不要只看镜像尺寸。"
+        },
+        {
+          "id": "a02-q2",
+          "topic": "DMA / RTOS",
+          "title": "volatile dma_done 是否足够",
+          "type": "review",
+          "difficulty": "工程进阶",
+          "question": "DMA ISR 中设 volatile dma_done=true；Task 在 while(!dma_done) 中空转。至少说明超时、内存序及 RTOS 设计的三个风险。",
+          "code": "static volatile bool dma_done;\nvoid DMA_IRQHandler(void){ DMA->STATUS=DMA_TC_FLAG; dma_done=true; }\nwhile (!dma_done) { }",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "volatile 只限制特定编译器访问优化，不保证原子发布、DMA Cache 一致性或内存序；IRQ 丢失/错误会导致永久等待；RTOS 下应考虑 Task Notification/Semaphore、timeout、DMA 错误处理，以及正确的 Buffer/Descriptor 同步。",
+          "explanation": "启动前清理 pending IRQ 和状态，防止旧中断误判本次完成。",
+          "diagnostic_cue": "DMA 偶发永久等待时查错误中断、旧 pending 位、超时和同步语义。"
+        },
+        {
+          "id": "a02-q3",
+          "topic": "I2S / Clock",
+          "title": "I2S BCLK 的正确公式",
+          "type": "fill",
+          "difficulty": "工程进阶",
+          "question": "48 kHz、2 声道、24-bit 有效数据、32-bit Slot，BCLK 应是多少？",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [
+            "3.072mhz",
+            "3072000hz",
+            "3072000",
+            "3.072 mhz",
+            "3072khz"
+          ],
+          "answer": "3.072 MHz",
+          "explanation": "BCLK=48000 × 2 × 32 = 3,072,000 Hz。Bit Depth 是有效音频位宽，Slot Width 是总线每通道占用时钟数。",
+          "diagnostic_cue": "I2S 时钟与计算不符时，先区分有效采样位宽与 Slot 位宽。"
+        }
+      ]
+    },
+    {
+      "id": "archive-03",
+      "label": "历史练习 03",
+      "intro": "DMA RX · 链接脚本 · Ring Buffer",
+      "questions": [
+        {
+          "id": "a03-q1",
+          "topic": "DMA / Cache",
+          "title": "DMA RX 完成仍读到旧数据",
+          "type": "knowledge",
+          "difficulty": "工程进阶",
+          "question": "RX DMA 非硬件一致，DMA 已写内存，但 parse_packet 读到旧数据。为什么接收前后都要考虑 Cache Maintenance？",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "DMA 后 CPU 可能命中旧 Cache Line，因此交回 CPU 前通常需要 Invalidate。DMA 前还必须按平台规则消除 Dirty Line 覆盖 DMA 新数据的风险（例如合适的 Clean/Invalidate）；必须在 DMA owns Buffer 时避免 CPU 访问，并按行对齐。",
+          "explanation": "起始地址 aligned 不代表末尾不会共享 Cache Line。",
+          "diagnostic_cue": "RX 数据旧值、调试器看到内存已更新时查 CPU Cache 和所有权。"
+        },
+        {
+          "id": "a03-q2",
+          "topic": "ELF / 链接",
+          "title": "理解 .data > RAM AT > FLASH",
+          "type": "knowledge",
+          "difficulty": "工程进阶",
+          "question": "给定链接脚本：.data 输出到 RAM，加载镜像在 FLASH。请解释 g_count=100 的启动拷贝和 g_state 的初始化方式。",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": ".data 运行地址 VMA 在 RAM、加载地址 LMA 在 FLASH。Reset_Handler 通常把初始值拷贝入 RAM；未显式初始化全局 g_state 一般进 .bss，由启动代码清零。",
+          "explanation": "Bootloader 应跳入正确的 Application 启动入口，不能随意绕过 .data/.bss 初始化。",
+          "diagnostic_cue": "Bootloader 跳转后变量随机、全局初始值错误时查启动段初始化。"
+        },
+        {
+          "id": "a03-q3",
+          "topic": "UART / Review",
+          "title": "Ring Buffer 的隐蔽溢出",
+          "type": "review",
+          "difficulty": "工程进阶",
+          "question": "下面的单生产者 ISR / 单消费者 Task 环形缓冲实现，为什么可能运行多天后才出错？指出至少 3 个问题。",
+          "code": "#define SIZE 256\nstatic uint8_t buffer[SIZE];\nstatic volatile uint8_t head, tail;\nvoid uart_rx_isr(uint8_t d){ buffer[head]=d; head++; }\nint uart_read(uint8_t *p){ if(head==tail)return -1; *p=buffer[tail++]; return 0; }",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "无 Full 判断，生产者追上消费者后 head==tail 被误判 Empty；无丢包统计；volatile 不构成跨核原子发布与完整同步。应采用容量约定、overflow 计数以及平台适用的原子或临界区。",
+          "explanation": "真实 burst 加上 Task 抢占会把低概率越界窗口放大。",
+          "diagnostic_cue": "长稳测才有偶发串口包错时先查 SPSC 溢出和发布顺序。"
+        }
+      ]
+    },
+    {
+      "id": "archive-04",
+      "label": "历史练习 04",
+      "intro": "FreeRTOS NVIC · SPI · ASRC",
+      "questions": [
+        {
+          "id": "a04-q1",
+          "topic": "中断 / FreeRTOS",
+          "title": "最高优先级 ISR 能用 FromISR 吗？",
+          "type": "choice",
+          "difficulty": "工程进阶",
+          "question": "Cortex-M + FreeRTOS 的 IRQ 配置 NVIC priority=0，ISR 中调用 xTaskNotifyFromISR。是否一定安全？为什么？",
+          "code": "",
+          "options": [
+            "可以，FromISR 适用于任意硬件 IRQ",
+            "不一定，高于 RTOS syscall 边界的 IRQ 不能调用内核 API",
+            "只要不调用 malloc 就可以",
+            "关中断后总可以"
+          ],
+          "correct_index": 1,
+          "accepted_answers": [],
+          "answer": "不安全：在典型 FreeRTOS Cortex-M 端口中，只有满足 configMAX_SYSCALL_INTERRUPT_PRIORITY 边界的 IRQ 可调用相应 FromISR API；数字 0 通常是最高硬件优先级。硬实时 IRQ 如不能调用内核 API，可转交给较低优先级 IRQ/安全机制。",
+          "explanation": "实际需核对优先级位数和优先级分组。",
+          "diagnostic_cue": "RTOS 内部状态随机损坏、ISR 中调 API 后 HardFault 时查 IRQ 优先级。"
+        },
+        {
+          "id": "a04-q2",
+          "topic": "SPI",
+          "title": "更换 Flash 后 JEDEC ID 错位",
+          "type": "knowledge",
+          "difficulty": "工程进阶",
+          "question": "旧 Flash 读 ID 正常，新 Flash 高速下出现 FF C8 40、C8 40 FF。列出至少 4 个排查方向。",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "检查 CPOL/CPHA、CS 建立/保持时间、首字节 dummy/RX FIFO 残留、器件允许最高时钟、采样点、引脚驱动能力、PCB 信号完整性。用逻辑分析仪或示波器对照 CS/SCLK/MOSI/MISO。",
+          "explanation": "低频恢复提示时序 margin 或硬件信号质量问题，但不能直接排除软件配置。",
+          "diagnostic_cue": "SPI 只有高频错位时查采样边沿、CS 和 RX FIFO。"
+        },
+        {
+          "id": "a04-q3",
+          "topic": "ASRC / Clock",
+          "title": "标称相同 48kHz 为什么还漂移",
+          "type": "fill",
+          "difficulty": "工程进阶",
+          "question": "Codec RX=48002.4Hz，SoC TX=47997.6Hz，独立时钟域。每秒净积累多少采样？FIFO 加大能否根治？",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [
+            "4.8",
+            "4.8samples/s",
+            "4.8 samples/s",
+            "4.8个样本/秒"
+          ],
+          "answer": "4.8 samples/s；FIFO 加大只能延后溢出，ASRC 可动态处理独立时钟域的实际采样率差。",
+          "explanation": "两个 48kHz 配置不代表物理上同一个时钟域。",
+          "diagnostic_cue": "长时间音频 FIFO 水位持续漂移时查采样率误差和 ASRC。"
+        }
+      ]
+    },
+    {
+      "id": "archive-05",
+      "label": "历史练习 05",
+      "intro": "I2C 恢复 · 优先级反转 · MMIO",
+      "questions": [
+        {
+          "id": "a05-q1",
+          "topic": "I2C",
+          "title": "MCU 复位后 SDA 一直为低",
+          "type": "knowledge",
+          "difficulty": "工程进阶",
+          "question": "MCU 正在读取 I2C Slave 时 Watchdog Reset，重启后 SCL 高、SDA 低，I2C 事务失败。可能根因及恢复措施是什么？",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "Slave 可能仍在发送某一数据位而等待 SCL。可按硬件允许的恢复流程暂切开漏 GPIO、检测 SDA、尝试最多约 9 个 SCL Pulse 并发送 STOP；仍失败应有明确错误上报、外设复位/断电恢复路径，不能无限重试。",
+          "explanation": "其他原因也可能是电平转换器故障、线路短路或 Slave 固件死锁。",
+          "diagnostic_cue": "单独 MCU 复位无效但整板断电恢复时查 I2C Slave 状态机失步。"
+        },
+        {
+          "id": "a05-q2",
+          "topic": "RTOS",
+          "title": "Priority Inversion 如何缓解",
+          "type": "choice",
+          "difficulty": "工程进阶",
+          "question": "Audio Task P10 等待 Log Task P2 持有的 Mutex，而 Network Task P6 长期运行，Audio 被延误。是什么现象，如何降低风险？",
+          "code": "",
+          "options": [
+            "优先级反转，应考虑 Priority Inheritance 和缩短临界区",
+            "只要把 Network Task 优先级降为 0 就能消除所有风险",
+            "Mutex 等价于 Binary Semaphore",
+            "提高 Audio 优先级总能解决"
+          ],
+          "correct_index": 0,
+          "accepted_answers": [],
+          "answer": "优先级反转。支持优先级继承的 Mutex 可暂时提高 Log 优先级，使其尽快释放锁；但不能消除慢 Flash/I/O 临界区本身的延时，音频实时路径应避免等待慢资源。",
+          "explanation": "二值信号量与 Mutex 的所有权和优先级继承语义通常不同。",
+          "diagnostic_cue": "最高优先级任务仍发生 underrun 且等待锁时查优先级反转。"
+        },
+        {
+          "id": "a05-q3",
+          "topic": "寄存器 / Review",
+          "title": "MMIO 轮询在 -O2 卡死",
+          "type": "review",
+          "difficulty": "工程进阶",
+          "question": "UART STATUS 定义成普通 uint32_t 指针后，-O0 正常，-O2 偶发死循环。指出原因及 volatile 之后仍需考虑的事。",
+          "code": "#define UART_STATUS (*(uint32_t*)0x40001000)\nwhile (!(UART_STATUS & (1U << 5))) { }",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "普通读取可能被编译器缓存、提升或合并，MMIO 通常应使用合适的 volatile 寄存器声明；但还需核对访问宽度、W1C/RC 语义、地址映射属性、同步、timeout、异常恢复。",
+          "explanation": "volatile 不提供所有内存屏障或跨核同步保证。",
+          "diagnostic_cue": "Debug 正常 Release 卡死的寄存器轮询，先查 volatile 和优化反汇编。"
+        }
+      ]
+    },
+    {
+      "id": "archive-06",
+      "label": "历史练习 06",
+      "intro": "SDIO · ISR 日志 · PLL",
+      "questions": [
+        {
+          "id": "a06-q1",
+          "topic": "SDIO / DMA",
+          "title": "DMA TC 能证明 SDIO 成功吗？",
+          "type": "choice",
+          "difficulty": "工程进阶",
+          "question": "SDIO CMD18 response OK、DMA TC=1，但偶发 SDIO Data CRC Error。能否直接返回成功？还要检查什么？",
+          "code": "",
+          "options": [
+            "能，DMA TC 就代表 CRC 正确",
+            "不能，还要看 SDIO Data End/CRC/Timeout 等状态",
+            "只需重新读一次 sector",
+            "只需等待 CMD response"
+          ],
+          "correct_index": 1,
+          "accepted_answers": [],
+          "answer": "不能。DMA TC 证明配置的搬运已完成，不证明 SD 总线数据正确；应综合 Data End、CRC/Timeout、控制器状态和多块停止流程（CMD12/Auto CMD12 等），检查 DMA 和外设状态机。",
+          "explanation": "4-bit/50MHz 错而 1-bit/25MHz 正常时重点检查时序、采样、驱动及信号完整性。",
+          "diagnostic_cue": "SDIO 读写数据偶发 CRC 错但 DMA 已完成时查外设数据路径状态。"
+        },
+        {
+          "id": "a06-q2",
+          "topic": "ISR / Review",
+          "title": "ISR 中调用通用日志函数",
+          "type": "review",
+          "difficulty": "工程进阶",
+          "question": "AUDIO ISR 读取 status 后调用含 256-byte 栈缓冲、vsnprintf、mutex_lock 和同步 uart_write 的 sdk_log，指出至少 4 个风险。",
+          "code": "void AUDIO_IRQHandler(void){\n    uint32_t st=AUDIO->STATUS;\n    sdk_log(\"audio irq=%08x\", st);\n    clear_audio_irq(st);\n}",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "ISR 栈消耗和嵌套风险；格式化执行时间不可预测；普通 Mutex 不能在 ISR 阻塞；同步串口耗时造成中断延迟、音频 underrun；日志应尽量只写固定长度事件 ID/时间戳和参数，后台 Task 再格式化输出。",
+          "explanation": "ISR 中只记录事实，非实时路径负责字符串表达。",
+          "diagnostic_cue": "加日志问题反而恶化、ISR Stack overflow 或 Audio underrun 时查阻塞式日志。"
+        },
+        {
+          "id": "a06-q3",
+          "topic": "Clock / 硬件",
+          "title": "低温下晶振 HSE_READY 永远不置位",
+          "type": "knowledge",
+          "difficulty": "工程进阶",
+          "question": "量产个别板卡低温下卡在 HSE_READY，轻微加热恢复。分别从硬件和 Clock Driver 提出排查/设计措施。",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "怀疑晶体 ESR/负载电容/振荡器驱动裕量、PCB 寄生参数和温度电压工艺边界，配合硬件实测；驱动必须有 startup timeout、故障记录、有限重试、内部 RC fallback 或 Safe Mode，PLL Lock 同理。",
+          "explanation": "PVT margin 和启动时间统计比盲目增大死循环等待更有价值。",
+          "diagnostic_cue": "低温特定板卡不启动、加热恢复时查晶振启动裕量。"
+        }
+      ]
+    },
+    {
+      "id": "archive-07",
+      "label": "历史练习 07",
+      "intro": "跨核同步 · 开漏 GPIO · DMA OWN",
+      "questions": [
+        {
+          "id": "a07-q1",
+          "topic": "内存序 / 多核",
+          "title": "ready=1 但另一个核仍读旧数据",
+          "type": "knowledge",
+          "difficulty": "工程进阶",
+          "question": "双核 SoC 中 Core0 先 memcpy(data)，再写 volatile ready=1；Core1 看到 ready 后读取 data，偶尔读到旧内容。应该从哪几层理解？",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "volatile 不保证 release/acquire 同步，不替代 CPU memory barrier 或非一致 Cache 的 Clean/Invalidate。正确方案需明确生产/消费 ownership，按平台选择原子发布 + acquire/release 和适当 Cache Maintenance。",
+          "explanation": "仅加 DMB/DSB 无法让彼此独立的非一致 Cache 自动同步。",
+          "diagnostic_cue": "跨核共享内存 ready 已更新而 payload 仍旧时查 ordering 和 coherency。"
+        },
+        {
+          "id": "a07-q2",
+          "topic": "GPIO / I2C",
+          "title": "I2C 引脚为什么通常配置开漏？",
+          "type": "knowledge",
+          "difficulty": "工程进阶",
+          "question": "工程师将 SDA/SCL 改成 Push-Pull 以加快波形，短线似乎正常。解释风险以及上升沿慢应如何调试。",
+          "code": "",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "Open-Drain 下设备仅主动拉低，线路高电平由 Pull-up 形成，支持 ACK、Clock Stretching 和仲裁。Push-Pull 可能与 Slave 低电平驱动冲突造成大电流。应根据 Rpullup × Cbus、VIH/VOL、器件 sink 能力、速率与电平转换器设计。",
+          "explanation": "上升沿慢不能靠强推高电平绕过 I2C 总线规则。",
+          "diagnostic_cue": "I2C 波形慢、设备偶发 ACK 异常时查上拉和总线电容。"
+        },
+        {
+          "id": "a07-q3",
+          "topic": "DMA / Review",
+          "title": "Descriptor OWN bit 为何最后设置",
+          "type": "review",
+          "difficulty": "工程进阶",
+          "question": "DMA Descriptor 的 OWN=1 表示交给硬件。下面代码为什么偶发读到旧 addr/length？修改顺序是否就万事大吉？",
+          "code": "void submit(dma_desc_t *d, void *buf, uint32_t len){\n    d->control=OWN;\n    d->addr=(uint32_t)buf;\n    d->length=len;\n}",
+          "options": [],
+          "correct_index": -1,
+          "accepted_answers": [],
+          "answer": "OWN 过早发布，DMA 可能在其余字段更新前取 Descriptor。应先填数据，按 non-coherent 平台执行 descriptor Cache Maintenance、内存屏障，再按芯片规定发布 OWN/doorbell；DMA 完成后 CPU 重新读取硬件更新字段同样需适当同步。",
+          "explanation": "OWN、READY、VALID 都是 ownership handoff 标志。",
+          "diagnostic_cue": "DMA 在高负载下读旧描述符时查 OWN 发布顺序与 Cache。"
+        }
+      ]
+    }
+  ]
+}
