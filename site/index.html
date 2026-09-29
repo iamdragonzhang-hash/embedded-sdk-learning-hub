@@ -6,8 +6,9 @@
   <meta name="theme-color" content="#f8f9fd">
   <meta name="description" content="嵌入式 SDK 每日训练：知识问答、Code Review、选择题、填空题与历史复习。">
   <title>Embedded SDK Learning Hub</title>
-  <link rel="stylesheet" href="./styles.css">
-  <script defer src="./app.js"></script>
+  <script>try { if (localStorage.getItem('embeddedlab:theme:v1') === 'dark') document.documentElement.dataset.theme = 'dark'; } catch (_) {}</script>
+  <link rel="stylesheet" href="./styles.css?v=2">
+  <script defer src="./app.js?v=2"></script>
 </head>
 <body>
  <div class="layout">
@@ -24,9 +25,18 @@
    <div class="side-footer">面向嵌入式、底层驱动与音频 DSP</div>
   </aside>
   <main class="main">
-   <header class="topbar"><span class="crumb">Workspace <span>/</span> <span id="breadcrumb">最新训练</span></span><span class="tz-pill">北京时间 · Asia/Shanghai</span></header>
+   <header class="topbar">
+    <span class="crumb">Workspace <span>/</span> <span id="breadcrumb">最新训练</span></span>
+    <div class="topbar-actions"><span class="tz-pill">北京时间 · Asia/Shanghai</span>
+    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="切换到深色主题" aria-pressed="false"><span aria-hidden="true">☾</span><span>深色模式</span></button></div>
+   </header>
    <section class="hero"><div class="hero-body"><span class="eyebrow">BUILD KNOWLEDGE, NOT JUST CODE</span><h1>每天进步一点，<br><em>成为更可靠的工程师。</em></h1><p>把问题想清楚，再看答案。让知识、调试经验和 Code Review 能力真正沉淀下来。</p><div class="hero-pills"><span>CPU / Cache / DMA</span><span>RTOS / Linux</span><span>DSP / Audio</span><span>Driver / Review</span></div></div><div class="hero-art" aria-hidden="true"><div class="art-window"><div class="art-head"><i></i><i></i><i></i><span>debug.log</span></div><div class="art-lines"><span>01&nbsp;&nbsp; <b>observe</b>(symptom)</span><span>02&nbsp;&nbsp; <b>reason</b>(evidence)</span><span>03&nbsp;&nbsp; <b>verify</b>(hypothesis)</span><span>04&nbsp;&nbsp; <b>remember</b>(pattern)</span></div><div class="art-success">● BUILD YOUR DEBUG INSTINCT</div></div></div></section>
-   <section class="stats"><div class="stat"><small>题库题目</small><strong id="stat-total">—</strong><span>持续积累</span></div><div class="stat"><small>已完成</small><strong id="stat-done">0</strong><span>当前浏览器</span></div><div class="stat"><small>待复习</small><strong id="stat-wrong">0</strong><span>错题与收藏</span></div><div class="stat"><small>完成进度</small><strong id="stat-percent">0%</strong><span>今天也要动脑</span></div></section>
+   <section class="stats" aria-label="学习统计与快捷入口">
+    <button type="button" class="stat stat-button" data-stat="all" aria-label="查看全部题目" aria-pressed="false"><span class="stat-top"><small>题库题目</small><span class="stat-arrow" aria-hidden="true">↗</span></span><strong id="stat-total">—</strong><span class="stat-hint">查看全部题目</span></button>
+    <button type="button" class="stat stat-button" data-stat="completed" aria-label="查看已完成题目" aria-pressed="false"><span class="stat-top"><small>已完成</small><span class="stat-arrow" aria-hidden="true">↗</span></span><strong id="stat-done">0</strong><span class="stat-hint">复盘已完成题目</span></button>
+    <button type="button" class="stat stat-button" data-stat="wrong" aria-label="查看错题与收藏" aria-pressed="false"><span class="stat-top"><small>待复习</small><span class="stat-arrow" aria-hidden="true">↗</span></span><strong id="stat-wrong">0</strong><span class="stat-hint">进入错题与收藏</span></button>
+    <button type="button" class="stat stat-button" data-stat="incomplete" aria-label="查看尚未完成的题目" aria-pressed="false"><span class="stat-top"><small>完成进度</small><span class="stat-arrow" aria-hidden="true">↗</span></span><strong id="stat-percent">0%</strong><span class="stat-hint">继续练习未完成题目</span></button>
+   </section>
    <section class="content">
     <div class="section-head"><div><span class="section-kicker" id="section-kicker">LATEST PRACTICE</span><h2 id="section-title">最新训练</h2><p id="section-caption">先思考，再揭晓答案。</p></div><div class="filter-row"><label class="search"><span>⌕</span><input type="search" id="search" placeholder="搜索主题或关键词" autocomplete="off"></label><select id="topic-filter" aria-label="按主题筛选"><option value="">全部主题</option></select></div></div>
     <div class="notice" id="notice" role="status" hidden></div>
