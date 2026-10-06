@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-06",
+  "intro": "ELF 弱符号 · UART DMA IDLE · GPIO 中断触发方式",
+  "questions": [
+    {
+      "id": "2026-10-06-q1",
+      "topic": "ELF / 链接",
+      "title": "weak 函数明明被强符号覆盖，为什么最终还是链接到默认实现？",
+      "type": "knowledge",
+      "difficulty": "高阶",
+      "question": "SDK 的 libsdk.a 中提供 weak 默认实现 board_clock_init()，应用侧另一个静态库 libboard.a 中提供同名 strong 实现。代码最终却仍执行 SDK 默认实现。解释为什么“strong 一定覆盖 weak”在静态库场景下还要考虑 archive member 的抽取规则，并给出排查方法。",
+      "code": "// libsdk.a\n__attribute__((weak)) void board_clock_init(void) { /* default */ }\n\n// libboard.a\nvoid board_clock_init(void) { /* board-specific */ }",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "strong 符号只有在包含它的目标文件真正被链接器从 archive 中抽取出来后，才有机会覆盖 weak。静态库通常按未解析符号按需抽取成员；如果前面的 weak 定义已经使 board_clock_init 不再是 unresolved，后续 libboard.a 中只为该符号存在的成员可能根本不会被抽取，因此最终只留下 weak 实现。可通过 map 文件、nm -A、readelf -Ws、链接器 trace/--trace-symbol 检查符号来自哪个对象，以及相关 archive member 是否被抽取。",
+      "explanation": "常见修复包括调整链接组织、确保包含 strong 实现的对象因其他必要符号被抽取、显式链接该对象，或谨慎使用 --whole-archive/链接器 group。不要把问题简单归因于 C 源码中的 weak/strong 语义，静态库的成员抽取发生在符号决议过程中。",
+      "diagnostic_cue": "平台覆盖函数写了却没有生效、map 中仍指向 SDK 默认实现时，优先查 archive 抽取与最终符号来源。"
+    },
+    {
+      "id": "2026-10-06-q2",
+      "topic": "UART / DMA",
+      "title": "UART Circular DMA + IDLE 中断为什么会偶发丢一段数据？",
+      "type": "review",
+      "difficulty": "高阶",
+      "question": "UART RX 使用 Circular DMA，IDLE 中断中通过 DMA->NDTR 计算当前写入位置，再把新增区间交给 Task。压力测试中偶发出现重复数据或少几个字节。请指出至少 3 个需要检查的竞态/边界问题。",
+      "code": "void UART_IRQHandler(void)\n{\n    if (UART->ISR & IDLE_FLAG) {\n        UART->ICR = IDLE_FLAG;\n        uint32_t pos = RX_SIZE - DMA->NDTR;\n        notify_rx(last_pos, pos);\n        last_pos = pos;\n    }\n}",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "需要检查：① DMA 在读取 NDTR 前后仍持续写入，位置快照与内存内容可能跨越竞态窗口；② Circular DMA 回卷时 last_pos > pos，必须拆成尾段和首段；③ IDLE 只表示一段时间没收到字符，不等于 DMA/FIFO 中所有字节已经稳定落入内存，具体外设可能还有 FIFO/总线延迟；④ Cacheable RX Buffer 还要按平台处理 DMA->CPU 的 Cache 一致性；⑤ Task 处理慢时生产者可能绕一圈覆盖尚未消费的数据，单看 last_pos 无法检测多圈丢失；⑥ 清 IDLE 的寄存器语义和读取顺序必须按芯片手册。",
+      "explanation": "更稳健的驱动通常把硬件 producer position 与软件 consumer position分开管理，正确处理 wrap、overflow 计数，并在必要时使用 DMA half/full transfer 事件配合 IDLE。位置快照、Cache 同步和所有权顺序都需要按 SoC 规则设计。",
+      "diagnostic_cue": "UART DMA 长包或 burst 下偶发缺字节、重复、只在高负载出现时，先查 NDTR 快照、wrap、overflow 和 Cache。"
+    },
+    {
+      "id": "2026-10-06-q3",
+      "topic": "GPIO / 中断",
+      "title": "为什么清了 GPIO Pending，ISR 还是立刻再次进入？",
+      "type": "choice",
+      "difficulty": "工程进阶",
+      "question": "某 GPIO 配置为低电平触发中断。ISR 中已经正确清除了 W1C pending bit，但退出 ISR 后马上再次进入；示波器看到引脚仍保持低电平。最合理的解释是什么？",
+      "code": "",
+      "options": [
+        "W1C 清中断一定失败了，需要把寄存器改成普通 RMW 清零",
+        "低电平触发属于 level-sensitive，只要电平条件仍成立，中断控制逻辑会再次置 pending",
+        "volatile 没有加在 GPIO 寄存器定义上，所以 NVIC 自动重新触发",
+        "只要先清 NVIC pending，就不会再次进入 ISR"
+      ],
+      "correct_index": 1,
+      "accepted_answers": [],
+      "answer": "选择 B：低电平触发是 level-sensitive。清除 pending 只是清掉当前锁存状态；如果引脚仍处于有效低电平，外设/中断控制器会再次检测到条件成立并重新产生 pending。",
+      "explanation": "处理 level-triggered IRQ 的关键是先消除或屏蔽真正的中断源，例如读取/处理设备直到条件解除、临时 mask 后交给 deferred work，或让外部设备释放该信号。单纯反复清 peripheral/NVIC pending 可能形成 interrupt storm。",
+      "diagnostic_cue": "ISR 刚退出就再次进入、pending 明明清过时，优先区分 edge-triggered 与 level-triggered，并检查物理信号是否仍有效。"
+    }
+  ]
+}
