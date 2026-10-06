@@ -10,11 +10,15 @@
 
 ## 每日自动更新
 
-在 Settings → Secrets and variables → Actions → New repository secret 创建 OPENAI_API_KEY。此密钥来自 OpenAI API 平台，和 ChatGPT Plus 分开计费，不要提交到代码或聊天。
-可选：Actions Variables 设置 OPENAI_MODEL，默认 gpt-5-mini。
-工作流 cron 为 UTC 09:00，每天北京时间 17:00 触发，但 GitHub Actions 可能延迟或偶尔错过运行。
-添加密钥后从 Actions 手动 Run workflow 验证完整生成、提交、部署。工作流需要 Actions 的仓库 Contents 写权限；如推送失败，检查 Settings → Actions → General → Workflow permissions、分支保护和运行日志。
-网站与 ChatGPT 现有定时消息互不依赖；它们不一定生成相同题目。
+每日题目不再由 GitHub Actions 调用 OpenAI API。现在由 ChatGPT 的“嵌入式每日训练”定时任务在北京时间 17:00 生成 1～3 道题，并通过已连接的 GitHub 插件写入：
+
+- `site/data/days/YYYY-MM-DD.json`
+- `site/data/manifest.json`
+
+提交到 `main` 后，GitHub Actions 只负责校验静态站点并部署 GitHub Pages，不会调用 OpenAI API，也不依赖 `OPENAI_API_KEY`。
+
+如果当天文件已经存在，定时任务应复用当天题目，不重复生成或覆盖历史。网站和 ChatGPT 消息使用同一份当天 JSON 作为最终落盘记录。
+
 
 ## 项目
 
