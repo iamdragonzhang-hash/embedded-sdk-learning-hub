@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-07",
+  "intro": "SDIO completion · RTOS Tickless Idle · SPI DMA cache",
+  "questions": [
+    {
+      "id": "2026-10-07-q1",
+      "topic": "SDIO / DMA",
+      "title": "DMA TC 后为什么 SD 卡写入仍可能未完成？",
+      "type": "knowledge",
+      "difficulty": "高阶",
+      "question": "SDIO 使用 DMA 写一个 block。DMA Transfer Complete 已到达，驱动立即返回成功，但压力测试偶发下一笔 CMD13 显示卡仍在 Programming。解释 DMA TC、Host Data Path 完成、SD 卡内部写完成三者区别，以及驱动应如何判断端到端事务完成。",
+      "code": "ret = wait_dma_tc();\nif (ret == 0) return 0;",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "DMA TC 只表示 DMA 完成预定搬运；还需检查 Host 数据路径的完成与 CRC/timeout/FIFO 等错误，并按协议确认卡已从 busy/programming 回到可继续工作的状态。具体机制依控制器和卡协议实现。",
+      "explanation": "子模块完成不等于端到端事务完成；错误路径还要统一停止数据路径、清状态并恢复状态机。",
+      "diagnostic_cue": "DMA TC 后仍有下一命令超时或卡 busy 时，拆开 DMA、Host Data Path、Card 三层完成条件。"
+    },
+    {
+      "id": "2026-10-07-q2",
+      "topic": "RTOS / 时钟",
+      "title": "Tickless Idle 后软件定时器为什么累计变慢？",
+      "type": "review",
+      "difficulty": "高阶",
+      "question": "RTOS 进入 Tickless Idle 前停止 SysTick，改用 32.768 kHz 低速定时器唤醒，之后补偿 OS tick。长稳测试发现周期任务累计漂移。请从时钟换算、计数器边界、临界区和唤醒延迟至少指出 4 个检查点。",
+      "code": "sleep_ticks = next_timeout_ticks;\nprogram_lptimer(sleep_ticks * 32768 / OS_TICK_HZ);\nenter_sleep();\nelapsed = read_lptimer();\nos_tick += elapsed * OS_TICK_HZ / 32768;",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "检查整数换算的累计取整误差；低速计数器位宽、wrap 和比较边界；编程到真正睡眠以及唤醒到读计数器的时间是否漏算或重复；停止 tick、读取下一超时和编程唤醒源之间的竞态；还应考虑低速晶振 ppm、校准及内核 tick step 语义。",
+      "explanation": "Tickless 本质上是在两个时基之间保持系统时间，取整、竞态和未计入的 latency 都会转化成时间漂移。",
+      "diagnostic_cue": "低功耗后 timeout 集体偏晚或运行越久偏差越大时，对比真实睡眠时间、LPT counter 和内核补偿 tick。"
+    },
+    {
+      "id": "2026-10-07-q3",
+      "topic": "SPI / DMA / Cache",
+      "title": "Descriptor 已 Clean，为什么 SPI DMA 仍偶发发送上一包？",
+      "type": "choice",
+      "difficulty": "工程进阶",
+      "question": "CPU 使用 write-back D-Cache。SPI TX DMA descriptor 指向 tx_buf。代码更新 tx_buf 和 descriptor，但只对 descriptor 执行 D-Cache Clean。Descriptor 中 addr/len 正确，DMA 却偶发发送旧 payload。最可能缺少什么？",
+      "code": "memcpy(tx_buf, src, len);\ndesc->addr = (uintptr_t)tx_buf;\ndesc->len = len;\ncache_clean(desc, sizeof(*desc));\nDMA->START = 1;",
+      "options": [
+        "只需把 desc 声明为 volatile",
+        "还必须按平台规则对 tx_buf 做 Clean/Write-back，并保证同步顺序",
+        "DMA TC 后 Invalidate tx_buf 即可",
+        "降低 SPI 时钟即可"
+      ],
+      "correct_index": 1,
+      "accepted_answers": [],
+      "answer": "选择 B。Descriptor 可见只保证 DMA 能看到正确地址和长度；payload 若仍停留在 CPU dirty cache line，非一致性 DMA 从 RAM 读取的仍可能是旧数据。",
+      "explanation": "移交 TX buffer 所有权前，应按平台规则对 payload 的完整 Cache Line 范围执行 Clean，并保证数据、descriptor 与启动操作的发布顺序。",
+      "diagnostic_cue": "DMA 描述符正确但发送旧 payload 时，要分别检查 descriptor 和 data buffer 两套 Cache 可见性。"
+    }
+  ]
+}
