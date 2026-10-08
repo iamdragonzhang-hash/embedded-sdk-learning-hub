@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-08",
+  "intro": "I2S/TDM 24-bit 符号扩展 · Cortex-M MSP/PSP 异常栈 · I2C 复合事务原子性",
+  "questions": [
+    {
+      "id": "2026-10-08-q1",
+      "topic": "I2S / TDM / 音频数据格式",
+      "title": "24-bit PCM 进了 32-bit DMA Word，为什么负半周被当成正数？",
+      "type": "review",
+      "difficulty": "高阶",
+      "question": "音频 Codec 通过 I2S/TDM 传输 24-bit 二补码 PCM，DMA 每个 sample 写入 32-bit word。驱动约定有效 24 bit 位于 bit[23:0]（右对齐），其中 bit23 为符号位。以下代码把数据送给 DSP 后，负值样本变成很大的正数，出现严重失真。请解释根因、给出可靠的符号扩展方式，并列出至少 3 个需要在驱动/硬件手册中确认的格式参数。若硬件改成左对齐，又应怎样处理？",
+      "code": "uint32_t raw = rx_dma_words[i];\nint32_t pcm = (int32_t)(raw & 0x00FFFFFFu);\nprocess_sample(pcm);",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "原代码清除了高 8 位，却没有把 bit23 的负号扩展到 int32_t 的 bit31:24，24-bit 负数会变成正数。对于右对齐且高位为 0 的 24-bit 原始值，可显式扩展：uint32_t v=raw & 0xFFFFFFu; int32_t pcm=(v & 0x800000u) ? (int32_t)((int64_t)v - 0x1000000LL) : (int32_t)v; 对支持算术右移的常见嵌入式编译器也可用 (int32_t)(raw << 8) >> 8，但负数的有符号右移在部分 C 标准版本中是实现定义的。若有效数据左对齐到 bit[31:8] 且 bit31 是符号位，可按目标编译器规则对 (int32_t)raw 做算术右移 8 位，或用可移植的数值转换。",
+      "explanation": "要确认 I2S standard/left-justified/TDM 模式、slot 宽度和有效位宽、RX FIFO/DMA 左右对齐与字节序、声道/slot 映射、bit clock 和 frame sync 极性。先从 DMA 原始十六进制数据定位 bit23/bit31，再验证 +FS/-FS 和 -1 的边界样本。",
+      "diagnostic_cue": "I2S/TDM 波形正常但 PCM 负值失真、幅度异常或左右声道错位时，优先查 FIFO 对齐、符号扩展和 slot mapping。"
+    },
+    {
+      "id": "2026-10-08-q2",
+      "topic": "Cortex-M / RTOS / 异常栈",
+      "title": "任务栈还有空间，为什么嵌套中断里仍然 HardFault？",
+      "type": "knowledge",
+      "difficulty": "高阶",
+      "question": "Cortex-M + RTOS 平台中，各 Task 的 stack high-water mark 都正常，但开启一个高频 SPI IRQ 后，偶发在嵌套 IRQ/日志格式化过程中 HardFault。系统配置为 Thread mode 使用 PSP、Handler mode 使用 MSP。请解释为什么 Task 栈检查无法排除栈溢出，异常入口可能自动压入哪些上下文，以及你会用哪些寄存器、链接符号和实验定位。若 MCU 有 FPU，排查还要增加什么？",
+      "code": "void SPI_IRQHandler(void)\n{\n    uint32_t st = SPI->STATUS;\n    debug_log(\"irq status=%08lx\", (unsigned long)st);\n    SPI->STATUS = st;  /* assume W1C */\n}",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "在题设的双栈配置中，普通 Task 在 PSP 上运行，而异常处理使用 MSP。Task high-water mark 只反映 PSP 任务栈，不能证明 MSP 足够。异常入口会保存基本异常帧（如 R0-R3、R12、LR、PC、xPSR），嵌套异常及 ISR C 调用会进一步消耗 MSP；FPU 启用时还需检查扩展浮点上下文及 lazy stacking。优先读取故障时 MSP/PSP、EXC_RETURN、CFSR/HFSR、栈帧 PC，核对启动文件和链接脚本的主栈范围/保护区，并给 MSP 填充水位哨兵、移除 ISR 中格式化日志、控制中断嵌套进行对照测试。",
+      "explanation": "部分 Cortex-M/RTOS 的中断栈组织不同，必须先核对端口实现；Fault 也可能来自外设寄存器访问、指针或中断清除时序，不应仅凭高频 IRQ 就认定栈溢出。",
+      "diagnostic_cue": "任务栈统计健康但异常只在嵌套 ISR 或 ISR printf 时发生，先区分 PSP 与 MSP，并检查异常帧和 FPU 上下文。"
+    },
+    {
+      "id": "2026-10-08-q3",
+      "topic": "I2C / SDK API / 并发",
+      "title": "两次 I2C API 都有 Mutex，为什么寄存器读还是偶发错位？",
+      "type": "choice",
+      "difficulty": "工程进阶",
+      "question": "两个任务共享一条 I2C 总线，驱动的 i2c_write() 和 i2c_read() 各自内部加锁/解锁。Task A 读取 Codec 寄存器时先写寄存器地址，再单独调用 read；Task B 可在两次调用之间访问同一 Codec。该器件要求写寄存器地址后用 repeated START 紧接着读。最稳健的 SDK API 设计是什么？",
+      "code": "// Task A\nuint8_t reg = 0x21;\ni2c_write(codec, &reg, 1); // locks/unlocks bus\n// Task B may run here\ni2c_read(codec, rx, 2);   // locks/unlocks bus",
+      "options": [
+        "保持两个独立调用；只要每次 API 内部有 Mutex，事务就一定原子",
+        "增加 i2c_transfer(messages, 2)，总线锁覆盖两条消息，硬件产生 repeated START，最后统一 STOP",
+        "在 Task A 的两个调用之间插入 delay_us(100)，让 Codec 有时间准备",
+        "将 I2C 引脚改成 Push-Pull，提高边沿速度以避免寄存器错位"
+      ],
+      "correct_index": 1,
+      "accepted_answers": [],
+      "answer": "选择 B。每个 API 各自持锁只能保护单次传输，无法保证“设置寄存器指针→repeated START→读取”这整个复合事务不被其他访问插入，也不能保证中间没有 STOP。应提供多消息的原子 transfer API，在一次总线所有权内按器件协议完成组合事务。",
+      "explanation": "实现时还需明确 7-bit 地址、读写方向、START/RESTART/STOP 语义、错误恢复和锁超时。某些器件允许 STOP 后再读，但题设明确要求 repeated START；是否需要禁止同一设备的跨任务并发也应由设备层统一协调。",
+      "diagnostic_cue": "单独 I2C 读写都正常，两个任务并发时寄存器数据偶发错位，优先检查复合事务边界和 repeated START。"
+    }
+  ]
+}
