@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-09",
+  "intro": "Cortex-M BASEPRI 临界区 · ELF .noinit 故障留存 · QSPI NOR XIP 升级",
+  "questions": [
+    {
+      "id": "2026-10-09-q1",
+      "topic": "Cortex-M / RTOS / 中断屏蔽",
+      "title": "进入 RTOS Critical Section 后，为什么高优先级 ISR 仍改坏共享状态？",
+      "type": "review",
+      "difficulty": "高阶",
+      "question": "某 Cortex-M + FreeRTOS 端口通过 BASEPRI 实现 taskENTER_CRITICAL()。任务在临界区内更新多字段共享结构体；一个硬件高优先级 IRQ（NVIC 数值优先级更小）也会读写它。开发者认为临界区可以屏蔽所有中断，但高负载下偶发结构体字段不一致。请解释 BASEPRI 与 PRIMASK 的区别、为什么临界区可能挡不住这个 ISR，并给出两种合理的同步/架构修复思路；说明为什么不能简单在高优先级 ISR 中调用 FromISR API。",
+      "code": "void update_route(void)\n{\n    taskENTER_CRITICAL();\n    shared.addr = new_addr;\n    shared.len  = new_len;\n    shared.ready = 1;\n    taskEXIT_CRITICAL();\n}\n\nvoid HIGH_PRIO_IRQHandler(void)\n{\n    if (shared.ready)\n        use_route(shared.addr, shared.len);\n}",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "许多 Cortex-M FreeRTOS 端口的 taskENTER_CRITICAL() 使用 BASEPRI，只屏蔽数值优先级达到/低于屏蔽阈值（数值 >= BASEPRI 阈值）的可屏蔽中断；数值更小、紧急程度更高的 IRQ 仍可抢占，因此 ISR 可能观察到 addr 更新但 len 未更新。PRIMASK 通常可屏蔽所有可配置优先级的普通中断（NMI/HardFault 等不受影响），但扩大屏蔽范围会损害实时性。修复可把共享数据交由可被临界区屏蔽的中断/任务统一管理（并满足 RTOS syscall 优先级限制），或采用针对该读写模式正确设计的原子发布/双缓冲快照及内存顺序；必要时用非常短的全局 IRQ 屏蔽保护快照。高于 configMAX_SYSCALL_INTERRUPT_PRIORITY 允许范围的 IRQ 不能调用 FreeRTOS FromISR API。",
+      "explanation": "必须检查具体 port、NVIC priority grouping 和 configMAX_SYSCALL_INTERRUPT_PRIORITY 的定义；volatile 不能保证多字段快照原子性。用 PRIMASK 前还要考虑中断延迟和多核场景。",
+      "diagnostic_cue": "taskENTER_CRITICAL 后共享结构仍偶发撕裂、仅最高优先级中断触发时出错，优先核对 BASEPRI 屏蔽范围与 ISR 优先级。"
+    },
+    {
+      "id": "2026-10-09-q2",
+      "topic": "ELF / Linker / Watchdog",
+      "title": "崩溃日志放进 .noinit，为什么看门狗复位后还是丢失？",
+      "type": "knowledge",
+      "difficulty": "工程进阶",
+      "question": "SDK 希望在 HardFault 中将 PC、LR、CFSR 等写入 SRAM 的 crash_record，随后由 Watchdog Reset，下一次启动上传故障记录。开发者仅给变量添加 __attribute__((section(\".noinit\")))，但有时复位后全为 0，有时为随机值。请从 linker script、startup 清零/拷贝范围、复位域与 SRAM 供电、数据有效性校验四个方面设计可靠方案。如何通过 ELF/Map 和启动汇编验证？",
+      "code": "__attribute__((section(\".noinit\")))\nstruct crash_record g_crash;\n\nvoid boot(void)\n{\n    if (g_crash.magic == 0x43524153u)\n        report_crash(&g_crash);\n}",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "仅指定 section 名称不保证保留数据。链接脚本应明确将 .noinit 放到目标可保持供电的 SRAM，通常使用 (NOLOAD)，并保证不落入 .bss 清零区或 .data 初始化拷贝区；检查启动代码 memset/copy 边界、Bootloader 和二级启动阶段是否覆盖该地址。确认目标芯片的 watchdog reset 是否保留该 SRAM bank 的电源和内容，掉电/冷复位通常不能依赖。记录应有 magic、version、length、CRC 或 checksum，并在写入内容完成后最后发布有效标志，上传成功后按约定清除，防止读取未初始化垃圾或半写入记录。使用 readelf -S、map、nm 定位 .noinit 的 VMA/尺寸并审查 Reset_Handler 清零范围。",
+      "explanation": "NOLOAD 主要约束镜像加载内容，不能替代启动代码检查，也不能保证物理 SRAM 在所有复位原因下保持。对写入中断/看门狗复位的半完成情况应设计提交标志与校验。",
+      "diagnostic_cue": "watchdog 后 crash dump 全 0、偶尔乱值或 bootloader 跳转后丢失时，优先检查 .noinit 链接位置、启动清零和 SRAM reset domain。"
+    },
+    {
+      "id": "2026-10-09-q3",
+      "topic": "SPI NOR / XIP / 固件升级",
+      "title": "升级代码搬到 SRAM 后，擦除 XIP Flash 仍 HardFault，最可能漏了什么？",
+      "type": "choice",
+      "difficulty": "高阶",
+      "question": "MCU 从外部 QSPI NOR 的 memory-mapped XIP 区执行程序。升级时把最外层 erase 函数标记为 .ramfunc，确认其入口位于 SRAM，但擦除当前 XIP 芯片时仍偶发 HardFault，且中断越频繁越容易出现。最完整的排查方向是什么？",
+      "code": "__attribute__((section(\".ramfunc\")))\nvoid flash_update(uint32_t addr, const uint8_t *data)\n{\n    qspi_erase_sector(addr);\n    qspi_program(addr, data, 4096);\n}",
+      "options": [
+        "只要 flash_update 的入口在 SRAM，外部 Flash Busy 时所有取指一定安全",
+        "只需将 QSPI 时钟降到原来的一半，便能消除所有异常",
+        "检查整个调用链、常量/跳转表、向量表和 ISR 是否仍访问 Busy 的 XIP Flash，并检查编程源缓冲与 XIP Cache 同步",
+        "把 flash_update 声明为 volatile 函数，防止编译器重排"
+      ],
+      "correct_index": 2,
+      "accepted_answers": [],
+      "answer": "C。仅把外层函数放进 SRAM 不够：qspi_erase_sector()/qspi_program()、被调用库函数、literal pool、只读表、异常向量表和 ISR 都可能仍在正在擦写的 XIP NOR 中；Busy 时 XIP 读是否阻塞、失败或返回异常取决于控制器和 Flash。应核对 map/disassembly，保证擦写期间所需代码、数据、向量及必要中断处理都不访问该 Flash；必要时屏蔽中断或将向量/关键 ISR 迁入 RAM，并考虑其他总线主设备。写后按芯片规则处理 XIP Cache/Prefetch 无效化和控制器模式切换。",
+      "explanation": "还需确认升级数据源不是同一颗忙碌 Flash 中不可访问的地址；不同 NOR 支持 suspend/resume、双 bank 或 read-while-write 的能力不同，按手册处理。",
+      "diagnostic_cue": "QSPI NOR 擦除/编程时 HardFault，关闭 IRQ 后概率下降，先查隐藏的 XIP 访问、RAMFUNC 完整调用图及向量表。"
+    }
+  ]
+}
