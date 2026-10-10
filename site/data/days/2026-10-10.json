@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-10",
+  "intro": "SPI DMA 总线完成判定 · SDIO CMD53 FIFO 地址模式 · ELF 向量表与 --gc-sections",
+  "questions": [
+    {
+      "id": "2026-10-10-q1",
+      "topic": "SPI / DMA / 事务时序",
+      "title": "SPI TX DMA 已完成，为什么从设备仍偶发少收最后一个字节？",
+      "type": "review",
+      "difficulty": "高阶",
+      "question": "某 SPI Master 通过 TX DMA 向外部器件连续发送命令与数据。DMA TC 中断到来后，SDK 立即拉高软件控制的 CS。逻辑分析仪偶发看到最后一个字节的时钟不完整；降低 SPI 时钟后问题缓解。请分析 DMA TC 与 SPI 总线事务完成的区别，指出代码至少 3 个风险，并设计包含超时、错误处理和 CS 时序的完成条件。不同 SoC 的 EOT/BSY/TX FIFO 状态应如何取舍？",
+      "code": "int spi_dma_write(const void *buf, size_t len)\n{\n    gpio_write(CS, 0);\n    spi_start_tx_dma(buf, len);\n    if (wait_dma_tc(10) != 0) {\n        gpio_write(CS, 1);\n        return -ETIMEDOUT;\n    }\n    gpio_write(CS, 1);  // DMA TC 后立即释放 CS\n    return 0;\n}",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "DMA TC 仅表示 DMA 已完成向 SPI 外设寄存器/FIFO 的数据搬运，不能保证最后一个字节已从 SPI 移位寄存器发送完毕。立即释放 CS 可能截断最后几个 SCK 边沿或违反从设备的 CS hold time。通常应先确认 DMA 正常完成，再根据控制器手册等待 SPI 的 EOT/Transfer Complete，或满足 TX FIFO empty 且 shift register idle/BSY 清零等明确的总线结束条件，最后满足片选保持时间后释放 CS。若是全双工，仍需处理 RX FIFO/RX DMA、溢出标志与接收数据；超时/错误时应安全停止 DMA、清理外设状态、恢复 CS 并报告失败，不能把超时当作正常事务结束。",
+      "explanation": "各芯片 BSY/EOT 的定义和勘误不同；有的硬件 CS 由控制器自动管理，不能直接套用通用寄存器轮询。还要核对 TX DMA 的 Cache 同步、SPI FIFO 深度和片选 setup/hold timing。SPI 时钟降低只是扩大了竞态窗口，不是正确修复。",
+      "diagnostic_cue": "SPI DMA TC 已到但最后一字节 CRC 错、从设备命令不完整或 CS 释放后才看到尾部 SCK 时，优先区分 DMA 完成和总线 EOT。"
+    },
+    {
+      "id": "2026-10-10-q2",
+      "topic": "SDIO / SDIO Function / CMD53",
+      "title": "SDIO CMD53 读取 FIFO，为什么地址递增模式会导致随机丢包？",
+      "type": "knowledge",
+      "difficulty": "高阶",
+      "question": "MCU 通过 SDIO 与 Wi-Fi 模组的 Function 1 通信。模组数据 FIFO 映射在固定端口地址 0x1000；SDK 使用 CMD53 一次读取 256 字节。单字节寄存器读写正常，但长帧偶发丢数据。当前驱动把 CMD53 的 OP Code 设置为地址递增。请解释 fixed-address 与 incrementing-address 模式的区别，为什么固定 FIFO 端口可能需要前者，以及如何检查 byte/block mode、传输长度、功能号和 host/controller 状态，避免将协议问题误判为 DMA 问题。",
+      "code": "// Wi-Fi Function 1: FIFO data port = 0x1000\nsdio_cmd53_read(/*func=*/1,\n                /*addr=*/0x1000,\n                /*len=*/256,\n                /*increment_addr=*/true,\n                rx_buf);",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "CMD53 的 OP Code=0 表示 fixed-address：总线上的地址字段保持不变，适合内部具有自推进 FIFO 语义的数据端口；OP Code=1 表示 incrementing-address：每个字节地址递增，适合线性寄存器/内存窗口。题设中模组定义 0x1000 为固定 FIFO 端口，incrementing 模式可能读到 0x1001、0x1002 等其他寄存器或无效地址，造成错包。还需核对 CMD53 的 Function Number、R/W、byte/block mode、count 字段与 block size、host DMA 长度、CMD53 响应及 CRC/timeout 等状态；byte mode 中 count=0 的协议含义是 512 字节，不能当成 0 字节。若使用 block mode，应按该 Function 的 block size 及块数编码处理，并遵守设备手册对 FIFO 访问的限制。",
+      "explanation": "具体 Wi-Fi 芯片是否要求 fixed-address 取决于端口映射，不是所有 SDIO FIFO 都一样。抓取 CMD53 参数并对照模组寄存器文档，可将地址模式错误与 DMA/cache/IRQ 时序问题分离；错误后应按协议清理 host 和 Function 状态。",
+      "diagnostic_cue": "SDIO CMD52 正常、CMD53 长帧错位或 Wi-Fi 模组 FIFO 数据异常时，先核对 OP Code 固定/递增地址、byte/block count 和 Function 号。"
+    },
+    {
+      "id": "2026-10-10-q3",
+      "topic": "ELF / Linker GC / 启动向量表",
+      "title": "打开 --gc-sections 后，为什么中断向量表从固件镜像里消失？",
+      "type": "choice",
+      "difficulty": "高阶",
+      "question": "MCU 工程启用 -ffunction-sections、-fdata-sections 和链接器 --gc-sections 以减小固件体积。startup.c 定义了 .isr_vector，但链接后 map 中找不到该段，启动后中断向量异常。下面哪种修复最符合 GNU ld 的 section garbage collection 机制？",
+      "code": "// startup.c\n__attribute__((used, section(\".isr_vector\")))\nconst void *vectors[] = { /* stack top, Reset_Handler, IRQ handlers ... */ };\n\n/* linker script */\n.isr_vector : { *(.isr_vector) } > FLASH",
+      "options": [
+        "只给 vectors 增加 volatile，阻止链接器丢弃",
+        "在 linker script 中对 .isr_vector 使用 KEEP(*(.isr_vector))，并核对向量表位置及 VTOR",
+        "关闭所有源文件的 -O2 优化，--gc-sections 就不会丢弃向量表",
+        "只在 C 代码中给 IRQ handler 添加 static，确保它们被链接"
+      ],
+      "correct_index": 1,
+      "accepted_answers": [],
+      "answer": "选择 B。--gc-sections 以可达性为依据回收未保留的输入 section；__attribute__((used)) 通常只保证编译器发出该变量，不一定阻止链接器 GC。链接脚本使用 KEEP(*(.isr_vector)) 可明确将向量表作为保留根，表中对 IRQ handler 的重定位引用通常使相应 handler section 也保留。还需确认 .isr_vector 位于正确的镜像地址、满足架构对齐要求、VTOR（如有）指向正确地址，以及启动代码没有错误地覆盖或重定位向量表。",
+      "explanation": "也可使用支持 SHF_GNU_RETAIN 的编译器/链接器机制，但具体工具链兼容性需验证。若 handler 在静态库中，仍需检查 archive 成员抽取与 weak 默认 handler；KEEP 不能自动解决所有库抽取和启动地址问题。",
+      "diagnostic_cue": "开启 -ffunction-sections/--gc-sections 后中断异常、向量表在 map 中消失，优先检查 KEEP、section GC 根和 VTOR。"
+    }
+  ]
+}
