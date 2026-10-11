@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-11",
+  "intro": "Cortex-M7 DTCM 与 DMA 可达性 · W1C 寄存器误清 · PLL 变频与外设时钟依赖",
+  "questions": [
+    {
+      "id": "2026-10-11-q1",
+      "topic": "DMA / 内存映射 / Cortex-M7",
+      "title": "CPU 能读写 DTCM 缓冲区，为什么 DMA 却搬不动？",
+      "type": "knowledge",
+      "difficulty": "高阶",
+      "question": "某 Cortex-M7 SoC 的 CPU 可以访问 DTCM，但其通用 DMA 控制器的总线主设备无法访问 DTCM。SDK 为降低访问延迟，把 SPI RX DMA Buffer 放进 .dtcm；CPU memset、单步检查地址均正常，但 DMA 启动后出现总线错误或收不到数据。请从 CPU/DMA 访问路径、Linker/Map、DMA 可达内存、Cache/MPU、Buffer 对齐和所有权六个角度设计定位与修复方案。为什么单纯 Clean/Invalidate D-Cache 无法修复此问题？",
+      "code": "__attribute__((section(\".dtcm\"), aligned(32)))\nstatic uint8_t spi_rx_buf[4096];\n\nvoid start_spi_rx(void)\n{\n    memset(spi_rx_buf, 0, sizeof(spi_rx_buf));\n    spi_dma_rx_start(spi_rx_buf, sizeof(spi_rx_buf));\n}",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "CPU 能访问的地址不一定在 DMA master 的可达地址空间。题设明确该 DMA 无法经总线访问 DTCM，因此即使 CPU 读写正确、地址 32 字节对齐，DMA 仍可能报 bus error 或传输无效。先用 Map/readelf/nm 确认 spi_rx_buf 的 VMA 属于 DTCM，查芯片 bus matrix 和 DMA 地址访问矩阵、DMA error status；把缓冲区放到该 DMA 可达的 SRAM/AXI SRAM 区，并按芯片要求配置 MPU 属性、对齐和 DMA/CPU 所有权。若该 SRAM 为 cacheable 且 DMA 非硬件一致，RX 前后按平台规则进行适当的 Cache Maintenance，避免共享 cache line。Clean/Invalidate 只能解决缓存可见性，不能为 DMA 创造通往 DTCM 的硬件总线路径。",
+      "explanation": "DTCM 是否可由 DMA 访问取决于 SoC：部分 DMA/MDMA 控制器的访问能力不同，不能把所有 Cortex-M7 芯片一概而论。优先核对具体 DMA master、地址区域和 interconnect，而非先调 Cache API。",
+      "diagnostic_cue": "CPU 能正常访问 DMA Buffer，但 DMA 报 bus error/传输停滞，尤其 buffer 被移动到 .dtcm 后才出现时，先核对 DMA 可达内存矩阵。"
+    },
+    {
+      "id": "2026-10-11-q2",
+      "topic": "寄存器 / W1C / 中断并发",
+      "title": "用 |= 清 W1C 中断位，为什么顺手清掉了另一个错误标志？",
+      "type": "review",
+      "difficulty": "高阶",
+      "question": "某 SoC 的 IRQ_STATUS 寄存器 bit0=DMA_DONE、bit1=RX_OVERFLOW，两位均为 W1C（写 1 清除，写 0 不影响）。ISR 希望只清 DMA_DONE，代码却在 RX_OVERFLOW 同时 pending 时偶发漏报溢出。请说明该 RMW 的具体读写序列、至少两个并发/寄存器语义风险，以及如何实现只清目标标志的可靠写法；如果 STATUS 寄存器还混有普通 RW 位，应额外注意什么？",
+      "code": "#define DMA_DONE    (1u << 0)\n#define RX_OVERFLOW (1u << 1)\n\nvoid DMA_IRQHandler(void)\n{\n    if (REG->IRQ_STATUS & DMA_DONE) {\n        REG->IRQ_STATUS |= DMA_DONE;  // 清 DMA_DONE ?\n        on_dma_complete();\n    }\n}",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "当 IRQ_STATUS 读出 DMA_DONE|RX_OVERFLOW=0b11 时，`REG->IRQ_STATUS |= DMA_DONE` 先读 0b11、再写 0b11；对 W1C 来说这会同时清除 DMA_DONE 与 RX_OVERFLOW，导致溢出事件丢失。正确方式通常是对纯 W1C 寄存器直接写目标掩码：`REG->IRQ_STATUS = DMA_DONE;`，无需先读后改写。RMW 还扩大了读取与写回之间新中断到来的竞态窗口；不要使用 `&= ~DMA_DONE` 来清 W1C，它不会清目标位且可能清掉其他读为 1 的 W1C 位。若寄存器混有 RW、W0C、只读或保留位，必须严格按 TRM 的逐位写入语义构造写值，优先使用专用 CLEAR 寄存器/SDK HAL，必要时配合外设要求的 barrier/readback。",
+      "explanation": "volatile 只能约束编译器访问优化，不能改变 W1C 的硬件写入语义，也不能让 read-modify-write 原子化。若有多个事件同时到达，ISR 应按设计读取快照、记录需处理的事件，并分别 ack；具体先处理还是先清除须参考芯片手册。",
+      "diagnostic_cue": "清一个中断标志后另一个 pending 位莫名消失、偶发漏报错误或 IRQ 事件时，先审查 W1C 寄存器是否被 |=、&= 或位域 RMW 操作。"
+    },
+    {
+      "id": "2026-10-11-q3",
+      "topic": "时钟树 / PLL / UART / I2S",
+      "title": "动态调整 PLL 后 UART 波特率偏了，I2S 还出现爆音，应如何处理？",
+      "type": "choice",
+      "difficulty": "工程进阶",
+      "question": "系统运行中把某 PLL 输出从 120 MHz 切换为 96 MHz。UART 和 I2S 的 kernel clock 都直接或间接由它派生，但驱动未重新计算分频，UART 实测波特率下降，音频出现 click/pop。哪种 SDK 设计最合理？",
+      "code": "// 仅更新 PLL，未通知依赖外设\nclock_set_pll_rate(PLL_AUDIO_SYS, 96000000u);\n// UART/I2S driver keeps old dividers",
+      "options": [
+        "只更新全局 SystemCoreClock；所有外设分频器会自动按新频率补偿",
+        "建立时钟依赖关系，变更前协调暂停/排空相关事务，切换并确认 PLL lock 后更新 UART/I2S 时钟与分频、恢复流，并验证误差及音频连续性",
+        "对 UART RX Buffer 做 D-Cache Invalidate，波特率就会恢复",
+        "将 UART 和 I2S 的寄存器都声明为 volatile，无需重新配置"
+      ],
+      "correct_index": 1,
+      "accepted_answers": [],
+      "answer": "选 B。PLL 改变会影响由其派生的外设 kernel clock；若分频器不变，UART baud、I2S BCLK/LRCLK 可能随源时钟变化。SDK 应维护 clock tree/consumer 依赖，变更前协调 UART 收发与音频 DMA/I2S 流的安全边界，按芯片要求切换时钟并等待 PLL 稳定，随后重新计算与写入各外设分频、校验实际误差，再恢复工作。对无缝音频还可能需要静音/缓冲、独立音频 PLL 或 ASRC/时钟域方案。",
+      "explanation": "SystemCoreClock 只表示某类核心时钟的软件状态，不会自动重配所有外设。若 UART/I2S 使用独立未变化的时钟源，则不一定受影响；题设已明确它们的 kernel clock 依赖该 PLL。变频顺序、是否允许在线改 PLL、锁定时间和无毛刺切换能力须以芯片手册为准。",
+      "diagnostic_cue": "CPU DVFS/PLL 切换后串口乱码、I2S 采样率漂移或爆音，但 DMA 和寄存器操作均正常时，优先检查 clock tree 依赖与外设分频是否同步更新。"
+    }
+  ]
+}
