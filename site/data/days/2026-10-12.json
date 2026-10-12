@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-12",
+  "intro": "跨核 Mailbox 同步 · RTOS Tick 回卷 · UART 异步 DMA Buffer",
+  "questions": [
+    {
+      "id": "2026-10-12-q1",
+      "topic": "跨核通信 / Cache / Memory Barrier",
+      "title": "敲响 Mailbox 门铃后，为什么 DSP 仍读到旧命令？",
+      "type": "knowledge",
+      "difficulty": "高阶",
+      "question": "Host 与 DSP 通过非硬件一致的共享 SRAM 传递命令。Host 写 payload、len、seq 后立即写 doorbell，DSP 中断里读取。有时出现旧数据或 seq 不匹配。分析 Cache 同步、内存发布顺序、slot 所有权和 ack 机制；volatile 能解决吗？",
+      "code": "memcpy(mb->payload, src, len);\nmb->len = len;\nmb->seq++;\nDOORBELL->SET = 1;",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "volatile 不提供跨核 Cache 一致性或复合消息原子性。Host 先确认上条消息已 ack、校验长度，写 payload/元数据，对共享缓存行按平台规则 Clean 并完成必要的内存屏障，最后写 doorbell。DSP 在读之前按平台规则 Invalidate/同步，校验 seq、len 和可选 CRC，处理完成后发布 ack；在 ack 前 Host 不得覆盖该 slot。高吞吐可使用带所有权状态的队列。",
+      "explanation": "数据可见性、doorbell 通知和消息所有权是三个不同层次；屏障与 Cache API 取决于 SoC，总线和缓存行布局需按手册检查。",
+      "diagnostic_cue": "跨核 Mailbox 中断正常但参数偶发旧值、序号跳变，先查 Cache 发布顺序及 ack/复用协议。"
+    },
+    {
+      "id": "2026-10-12-q2",
+      "topic": "RTOS / Tick 回卷",
+      "title": "Tick 回卷时为什么 100ms 等待立即超时？",
+      "type": "review",
+      "difficulty": "高阶",
+      "question": "32-bit TickType_t 的等待代码在 Tick 接近 0xFFFFFFFF 时立即超时。找出问题并给出稳健的判断，说明为何应优先使用 RTOS 超时 API。",
+      "code": "TickType_t deadline=xTaskGetTickCount()+pdMS_TO_TICKS(100);\nwhile(xTaskGetTickCount()<deadline){if(DEV->STATUS&READY)return 0;}\nreturn -ETIMEDOUT;",
+      "options": [],
+      "correct_index": -1,
+      "accepted_answers": [],
+      "answer": "无符号 Tick 回卷使 deadline 可能小于 start，普通大小比较失效。例如 start=0xFFFFFFF0、timeout=100，deadline=0x54，循环立即结束。短于回卷周期的等待可用 `(TickType_t)(now-start)<timeout_ticks` 比较相对时间；更推荐 FreeRTOS 的 xTaskCheckForTimeOut 等机制或带超时的阻塞同步。",
+      "explanation": "还需核对 TickType_t 宽度、pdMS_TO_TICKS 整数截断/溢出、任务调度及长时间忙等问题；相对计数也不能无限期跨多次回卷。",
+      "diagnostic_cue": "运行很久才发生立即超时或卡死，检查 tick 回卷与绝对 deadline 比较。"
+    },
+    {
+      "id": "2026-10-12-q3",
+      "topic": "UART / DMA / Buffer 生命周期",
+      "title": "异步 UART DMA 为什么把局部数组发送成乱码？",
+      "type": "choice",
+      "difficulty": "工程进阶",
+      "question": "uart_tx_dma_async 只登记指针并立即返回。调用者将栈上 packet 传入后返回，DMA 仍在发送。哪种方案最可靠？",
+      "code": "void send_status(void){uint8_t packet[16];encode(packet);uart_tx_dma_async(packet,16);}",
+      "options": [
+        "将 packet 声明为 volatile",
+        "固定延时 10 微秒后返回",
+        "使用完成前保持有效的 DMA 可达持久缓冲，或让驱动先复制数据，并明确所有权和 Cache 同步",
+        "DMA 源地址正确就无需其他处理"
+      ],
+      "correct_index": 2,
+      "accepted_answers": [],
+      "answer": "选 C。异步 DMA 可能在函数返回后继续访问已经结束生命周期的栈对象；该内存可被复用。应使用持久缓冲或驱动内部复制，完成前不得修改/释放，并按平台规则处理 Cache、可达性、队列与错误回调。",
+      "explanation": "volatile 既不延长生命周期也不保证 Cache 一致性；固定延时不等于 DMA 完成。",
+      "diagnostic_cue": "DMA 传入局部数组、临时缓冲后偶发乱码，优先检查异步 Buffer 生命周期和所有权。"
+    }
+  ]
+}
